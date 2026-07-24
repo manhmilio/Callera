@@ -1,19 +1,29 @@
-# Môi trường & secrets
+# Biến môi trường / secrets — không bao giờ commit
 .env
-venv/
-env/
-.venv/
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+dist/
 *.egg-info/
-.pytest_cache/
+.eggs/
 
-# Editor / OS
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Editor / IDE
 .vscode/
 .idea/
+*.swp
+
+# OS
 .DS_Store
 Thumbs.db
 
