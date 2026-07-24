@@ -3,9 +3,11 @@ import random
 import asyncio
 import unicodedata
 from collections import defaultdict
+from io import BytesIO
 
 import aiohttp
 import discord
+from PIL import Image, ImageFilter
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -149,89 +151,30 @@ async def search_pixabay(query: str) -> list[dict]:
     return images
 
 
+# Danh sách tag mẫu dùng cho lệnh /random_photo - có thể tự thêm/bớt tùy ý
 RANDOM_TAGS = [
-    # Phong cảnh thiên nhiên
     "hoàng hôn", "bình minh", "biển", "núi", "rừng", "sa mạc", "thác nước",
-    "hồ nước", "cánh đồng lúa", "ruộng bậc thang", "bầu trời sao", "mây", "tuyết", "hoa",
-
-    # Kiến trúc / đô thị
-    "đường phố", "kiến trúc cổ", "chùa", "cầu", "hòn đảo",
-
-    # Địa danh Việt Nam
+    "hồ nước", "cánh đồng lúa", "ruộng bậc thang", "đường phố", "kiến trúc cổ",
+    "chùa", "cầu", "hòn đảo", "bầu trời sao", "mây", "tuyết", "hoa",
     "Trường Sa", "Hoàng Sa", "Hạ Long", "Sapa", "Đà Lạt", "Hội An", "Phú Quốc",
-
-    # Địa danh quốc tế
     "Tokyo", "Paris", "New York", "Rome", "Iceland", "Switzerland Alps",
-
-    # Con người / đời sống
-    "chân dung", "sinh viên", "giáo viên", "học sinh", "gia đình",
-    "người lao động", "nụ cười", "con người Việt Nam", "trang phục áo dài",
-    "trẻ em", "người già", "vận động viên",
 ]
 
 # Danh sách địa danh dùng cho mini-game /guess_location, kèm các đáp án được
 # chấp nhận (không dấu, viết thường). Có thể tự thêm/bớt tùy ý.
 GUESS_LOCATIONS = {
-    # --- Việt Nam ---
     "Hạ Long": ["ha long", "vinh ha long", "halong", "halong bay"],
     "Sapa": ["sapa", "sa pa"],
     "Đà Lạt": ["da lat", "dalat"],
     "Hội An": ["hoi an", "hoian"],
     "Phú Quốc": ["phu quoc"],
     "Trường Sa": ["truong sa", "spratly"],
-    "Hoàng Sa": ["hoang sa", "paracel"],
-    "Ninh Bình": ["ninh binh", "tam coc", "trang an"],
-    "Phong Nha - Kẻ Bàng": ["phong nha", "ke bang", "phong nha ke bang"],
-    "Mũi Né": ["mui ne"],
-    "Nha Trang": ["nha trang"],
-    "Đà Nẵng": ["da nang", "danang"],
-    "Huế": ["hue"],
-    "Hà Nội": ["ha noi", "hanoi"],
-    "Thành phố Hồ Chí Minh": ["ho chi minh", "sai gon", "saigon", "hcmc", "tp hcm"],
-    "Mù Cang Chải": ["mu cang chai"],
-    "Hà Giang": ["ha giang"],
-    "Cát Bà": ["cat ba"],
-    "Côn Đảo": ["con dao"],
-    "Đồng bằng sông Cửu Long": ["mekong", "mekong delta", "song cuu long", "cuu long"],
-
-    # --- Châu Á ---
     "Tokyo": ["tokyo"],
-    "Kyoto": ["kyoto"],
-    "Núi Phú Sĩ": ["fuji", "mount fuji", "phu si"],
-    "Bangkok": ["bangkok"],
-    "Angkor Wat": ["angkor wat", "angkor", "siem reap"],
-    "Bali": ["bali"],
-    "Singapore": ["singapore"],
-    "Vạn Lý Trường Thành": ["great wall", "van ly truong thanh", "van li truong thanh"],
-    "Seoul": ["seoul"],
-    "Maldives": ["maldives"],
-
-    # --- Châu Âu ---
     "Paris": ["paris"],
+    "New York": ["new york", "nyc"],
     "Rome": ["rome", "roma"],
-    "Venice": ["venice", "venezia"],
-    "Barcelona": ["barcelona"],
-    "London": ["london"],
-    "Santorini": ["santorini"],
     "Iceland": ["iceland"],
     "Switzerland Alps": ["swiss alps", "switzerland", "alps", "thuy si"],
-    "Amsterdam": ["amsterdam"],
-    "Praha": ["prague", "praha"],
-    "Na Uy - Vịnh hẹp": ["norway", "fjord", "na uy"],
-
-    # --- Châu Mỹ ---
-    "New York": ["new york", "nyc"],
-    "Grand Canyon": ["grand canyon"],
-    "Machu Picchu": ["machu picchu"],
-    "Rio de Janeiro": ["rio de janeiro", "rio"],
-    "Niagara Falls": ["niagara", "niagara falls"],
-
-    # --- Châu Phi / Trung Đông / Châu Đại Dương ---
-    "Kim tự tháp Ai Cập": ["pyramid", "kim tu thap", "egypt", "giza"],
-    "Sahara": ["sahara"],
-    "Dubai": ["dubai"],
-    "Sydney": ["sydney"],
-    "New Zealand": ["new zealand"],
 }
 
 
@@ -659,19 +602,142 @@ async def guess_location(interaction: discord.Interaction):
     }
 
 
+# ---------------------------------------------------------------------------
+# New feature: /blur_guess — guess-the-location mini-game with a blurred photo
+# ---------------------------------------------------------------------------
+
+DEFAULT_BLUR_RADIUS = 30  # higher = blurrier; tune to taste
+
+# channel_id -> {"answer_tag": str, "accepted": list[str], "image_url": str, "source": str}
+active_blur_games: dict[int, dict] = {}
+
+
+async def download_image_bytes(url: str) -> bytes:
+    """Download the raw bytes of an image so it can be processed with Pillow.
+
+    Note: this is the only place in the bot that actually downloads image
+    bytes (everything else just relays the source URL to Discord). Bytes are
+    kept in memory only, nothing is written to disk.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"Failed to download the source image (status {resp.status}).")
+            return await resp.read()
+
+
+def blur_image_bytes(image_bytes: bytes, blur_radius: int = DEFAULT_BLUR_RADIUS) -> BytesIO:
+    """Apply a Gaussian blur to raw image bytes and return an in-memory PNG buffer."""
+    with Image.open(BytesIO(image_bytes)) as img:
+        img = img.convert("RGB")
+        blurred = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        buffer = BytesIO()
+        blurred.save(buffer, format="PNG")
+        buffer.seek(0)
+        return buffer
+
+
+async def expire_blur_game(channel_id: int, answer_tag: str, timeout: float = 180.0) -> None:
+    """Auto-end a /blur_guess round if nobody guesses it in time, and reveal the answer."""
+    await asyncio.sleep(timeout)
+    game = active_blur_games.get(channel_id)
+    if game is None or game["answer_tag"] != answer_tag:
+        return  # round already finished (guessed correctly or replaced)
+
+    del active_blur_games[channel_id]
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return
+
+    reveal_embed = discord.Embed(
+        title="⏰ Hết giờ!",
+        description=f"Không ai đoán đúng. Địa danh trong ảnh là **{answer_tag}**.",
+        color=discord.Color.orange(),
+    )
+    reveal_embed.set_image(url=game["image_url"])
+    reveal_embed.set_footer(text=f"Nguồn: {game['source']}")
+    await channel.send(embed=reveal_embed)
+
+
+@bot.tree.command(name="blur_guess", description="Đoán địa danh qua 1 tấm ảnh bị làm mờ")
+async def blur_guess(interaction: discord.Interaction):
+    if interaction.channel_id in active_blur_games:
+        await interaction.response.send_message(
+            "Đang có 1 ván câu đố mù chưa kết thúc trong kênh này, chờ ván trước xong đã nhé.",
+            ephemeral=True,
+        )
+        return
+
+    answer_tag = random.choice(list(GUESS_LOCATIONS.keys()))
+
+    await interaction.response.defer()
+    try:
+        images = await search_all_sources(answer_tag)
+    except Exception as e:
+        await interaction.followup.send(f"Có lỗi xảy ra khi tìm ảnh: {e}")
+        return
+
+    if not images:
+        await interaction.followup.send("Không tìm được ảnh cho vòng chơi này, thử lại sau nhé.")
+        return
+
+    chosen = random.choice(images)
+
+    try:
+        original_bytes = await download_image_bytes(chosen["image_url"])
+        blurred_buffer = blur_image_bytes(original_bytes)
+    except Exception as e:
+        await interaction.followup.send(f"Có lỗi xảy ra khi làm mờ ảnh: {e}")
+        return
+
+    file = discord.File(blurred_buffer, filename="blurred.png")
+    embed = discord.Embed(
+        title="🌫️ Câu đố mù — Đoán địa danh!",
+        description="Ảnh này đang bị làm mờ. Trả lời trực tiếp trong kênh này, ai đúng đầu tiên thắng!",
+        color=discord.Color.dark_teal(),
+    )
+    embed.set_image(url="attachment://blurred.png")
+    embed.set_footer(text=f"Nguồn: {chosen['source']}")
+
+    await interaction.followup.send(embed=embed, file=file)
+
+    if chosen["source"] == "Unsplash":
+        await trigger_unsplash_download(chosen.get("download_location", ""))
+
+    active_blur_games[interaction.channel_id] = {
+        "answer_tag": answer_tag,
+        "accepted": GUESS_LOCATIONS[answer_tag],
+        "image_url": chosen["image_url"],
+        "source": chosen["source"],
+    }
+    asyncio.create_task(expire_blur_game(interaction.channel_id, answer_tag))
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    guess = normalize_text(message.content)
+
     game = active_guess_games.get(message.channel.id)
-    if game:
-        guess = normalize_text(message.content)
-        if any(normalize_text(ans) in guess for ans in game["accepted"]):
-            del active_guess_games[message.channel.id]
-            await message.reply(
-                f"🎉 Chính xác, {message.author.mention}! Địa danh trong ảnh là **{game['answer_tag']}**."
-            )
+    if game and any(normalize_text(ans) in guess for ans in game["accepted"]):
+        del active_guess_games[message.channel.id]
+        await message.reply(
+            f"🎉 Chính xác, {message.author.mention}! Địa danh trong ảnh là **{game['answer_tag']}**."
+        )
+
+    blur_game = active_blur_games.get(message.channel.id)
+    if blur_game and any(normalize_text(ans) in guess for ans in blur_game["accepted"]):
+        del active_blur_games[message.channel.id]
+        reveal_embed = discord.Embed(
+            title="✅ Đoán đúng rồi!",
+            description=f"Địa danh trong ảnh là **{blur_game['answer_tag']}**.",
+            color=discord.Color.green(),
+        )
+        reveal_embed.set_image(url=blur_game["image_url"])
+        reveal_embed.set_footer(text=f"Nguồn: {blur_game['source']}")
+        await message.reply(f"🎉 Chính xác, {message.author.mention}!", embed=reveal_embed)
 
     # Vẫn cần gọi để các lệnh dạng prefix (!) nếu có trong tương lai vẫn hoạt động
     await bot.process_commands(message)
