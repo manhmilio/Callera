@@ -149,30 +149,89 @@ async def search_pixabay(query: str) -> list[dict]:
     return images
 
 
-# Danh sách tag mẫu dùng cho lệnh /random_photo - có thể tự thêm/bớt tùy ý
 RANDOM_TAGS = [
+    # Phong cảnh thiên nhiên
     "hoàng hôn", "bình minh", "biển", "núi", "rừng", "sa mạc", "thác nước",
-    "hồ nước", "cánh đồng lúa", "ruộng bậc thang", "đường phố", "kiến trúc cổ",
-    "chùa", "cầu", "hòn đảo", "bầu trời sao", "mây", "tuyết", "hoa",
+    "hồ nước", "cánh đồng lúa", "ruộng bậc thang", "bầu trời sao", "mây", "tuyết", "hoa",
+
+    # Kiến trúc / đô thị
+    "đường phố", "kiến trúc cổ", "chùa", "cầu", "hòn đảo",
+
+    # Địa danh Việt Nam
     "Trường Sa", "Hoàng Sa", "Hạ Long", "Sapa", "Đà Lạt", "Hội An", "Phú Quốc",
+
+    # Địa danh quốc tế
     "Tokyo", "Paris", "New York", "Rome", "Iceland", "Switzerland Alps",
+
+    # Con người / đời sống
+    "chân dung", "sinh viên", "giáo viên", "học sinh", "gia đình",
+    "người lao động", "nụ cười", "con người Việt Nam", "trang phục áo dài",
+    "trẻ em", "người già", "vận động viên",
 ]
 
 # Danh sách địa danh dùng cho mini-game /guess_location, kèm các đáp án được
 # chấp nhận (không dấu, viết thường). Có thể tự thêm/bớt tùy ý.
 GUESS_LOCATIONS = {
+    # --- Việt Nam ---
     "Hạ Long": ["ha long", "vinh ha long", "halong", "halong bay"],
     "Sapa": ["sapa", "sa pa"],
     "Đà Lạt": ["da lat", "dalat"],
     "Hội An": ["hoi an", "hoian"],
     "Phú Quốc": ["phu quoc"],
     "Trường Sa": ["truong sa", "spratly"],
+    "Hoàng Sa": ["hoang sa", "paracel"],
+    "Ninh Bình": ["ninh binh", "tam coc", "trang an"],
+    "Phong Nha - Kẻ Bàng": ["phong nha", "ke bang", "phong nha ke bang"],
+    "Mũi Né": ["mui ne"],
+    "Nha Trang": ["nha trang"],
+    "Đà Nẵng": ["da nang", "danang"],
+    "Huế": ["hue"],
+    "Hà Nội": ["ha noi", "hanoi"],
+    "Thành phố Hồ Chí Minh": ["ho chi minh", "sai gon", "saigon", "hcmc", "tp hcm"],
+    "Mù Cang Chải": ["mu cang chai"],
+    "Hà Giang": ["ha giang"],
+    "Cát Bà": ["cat ba"],
+    "Côn Đảo": ["con dao"],
+    "Đồng bằng sông Cửu Long": ["mekong", "mekong delta", "song cuu long", "cuu long"],
+
+    # --- Châu Á ---
     "Tokyo": ["tokyo"],
+    "Kyoto": ["kyoto"],
+    "Núi Phú Sĩ": ["fuji", "mount fuji", "phu si"],
+    "Bangkok": ["bangkok"],
+    "Angkor Wat": ["angkor wat", "angkor", "siem reap"],
+    "Bali": ["bali"],
+    "Singapore": ["singapore"],
+    "Vạn Lý Trường Thành": ["great wall", "van ly truong thanh", "van li truong thanh"],
+    "Seoul": ["seoul"],
+    "Maldives": ["maldives"],
+
+    # --- Châu Âu ---
     "Paris": ["paris"],
-    "New York": ["new york", "nyc"],
     "Rome": ["rome", "roma"],
+    "Venice": ["venice", "venezia"],
+    "Barcelona": ["barcelona"],
+    "London": ["london"],
+    "Santorini": ["santorini"],
     "Iceland": ["iceland"],
     "Switzerland Alps": ["swiss alps", "switzerland", "alps", "thuy si"],
+    "Amsterdam": ["amsterdam"],
+    "Praha": ["prague", "praha"],
+    "Na Uy - Vịnh hẹp": ["norway", "fjord", "na uy"],
+
+    # --- Châu Mỹ ---
+    "New York": ["new york", "nyc"],
+    "Grand Canyon": ["grand canyon"],
+    "Machu Picchu": ["machu picchu"],
+    "Rio de Janeiro": ["rio de janeiro", "rio"],
+    "Niagara Falls": ["niagara", "niagara falls"],
+
+    # --- Châu Phi / Trung Đông / Châu Đại Dương ---
+    "Kim tự tháp Ai Cập": ["pyramid", "kim tu thap", "egypt", "giza"],
+    "Sahara": ["sahara"],
+    "Dubai": ["dubai"],
+    "Sydney": ["sydney"],
+    "New Zealand": ["new zealand"],
 }
 
 
