@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount thư mục data ra ngoài source code — file bot.sqlite3 sẽ nằm ở
+      # ./data/bot.sqlite3 trên host, không mất khi container bị rebuild/xoá.
+      - ./data:/app/data

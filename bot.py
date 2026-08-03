@@ -1,18 +1,21 @@
 """Entry point của Discord Image Bot.
 
 File này CHỈ chịu trách nhiệm: tạo bot instance, gắn ImageAggregator dùng
-chung, load các cogs (mỗi tính năng nằm ở cogs/), rồi chạy bot. Toàn bộ logic
-tính năng nằm trong cogs/, services/, data/, utils/ — xem README/các file docs
-để biết chi tiết từng phần.
+chung, khởi tạo kết nối DB cho module farewell, load các cogs (mỗi tính năng
+nằm ở cogs/), rồi chạy bot. Toàn bộ logic tính năng nằm trong cogs/,
+services/, data/, utils/, db/ — xem README/các file docs để biết chi tiết
+từng phần.
 """
 
 import asyncio
 import logging
+import os
 
 import discord
 from discord.ext import commands
 
 import config
+from db.connection import close_db, init_db
 from services import ImageAggregator, UnsplashService, PexelsService, PixabayService
 
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +46,7 @@ INITIAL_EXTENSIONS = [
     "cogs.battle",
     "cogs.guess",
     "cogs.blur_guess",
+    "cogs.farewell",
 ]
 
 
@@ -54,10 +58,20 @@ async def on_ready():
 
 
 async def main() -> None:
+    # Đảm bảo thư mục chứa file SQLite tồn tại (khi chạy local không qua
+    # Docker thì thư mục data/ có thể chưa được tạo sẵn).
+    os.makedirs(os.path.dirname(config.SQLITE_DB_PATH) or ".", exist_ok=True)
+
     async with bot:
-        for extension in INITIAL_EXTENSIONS:
-            await bot.load_extension(extension)
-        await bot.start(config.DISCORD_TOKEN)
+        # Gắn kết nối DB dùng chung vào bot instance — các cog truy cập qua
+        # self.bot.db (xem cogs/farewell.py + db/farewell_repository.py).
+        bot.db = await init_db(config.SQLITE_DB_PATH)
+        try:
+            for extension in INITIAL_EXTENSIONS:
+                await bot.load_extension(extension)
+            await bot.start(config.DISCORD_TOKEN)
+        finally:
+            await close_db(bot.db)
 
 
 if __name__ == "__main__":

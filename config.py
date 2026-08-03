@@ -14,3 +14,8 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY")
+
+# Đường dẫn file SQLite dùng cho module farewell (db/connection.py).
+# Mặc định nằm trong thư mục data/ — thư mục này được mount qua Docker volume
+# (xem docker-compose.yml) để không mất dữ liệu khi container rebuild/xoá.
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "data/bot.sqlite3")
