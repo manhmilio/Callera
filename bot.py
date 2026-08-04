@@ -1,10 +1,10 @@
 """Entry point của Discord Image Bot.
 
 File này CHỈ chịu trách nhiệm: tạo bot instance, gắn ImageAggregator dùng
-chung, khởi tạo kết nối DB cho module farewell, load các cogs (mỗi tính năng
-nằm ở cogs/), rồi chạy bot. Toàn bộ logic tính năng nằm trong cogs/,
-services/, data/, utils/, db/ — xem README/các file docs để biết chi tiết
-từng phần.
+chung, khởi tạo kết nối DB cho module farewell/study_reminder, load các cogs
+(mỗi tính năng nằm ở cogs/), rồi chạy bot. Toàn bộ logic tính năng nằm trong
+cogs/, services/, data/, utils/, db/ — xem README/các file docs để biết chi
+tiết từng phần.
 """
 
 import asyncio
@@ -25,6 +25,14 @@ intents = discord.Intents.default()
 # nếu không /guess_location và /blur_guess sẽ không đọc được nội dung tin
 # nhắn người chơi gõ để đoán.
 intents.message_content = True
+
+# 3 intent dưới đây đều là Privileged Gateway Intent — phải bật thủ công ở
+# Discord Developer Portal > Bot (ngoài việc set True ở code), nếu không
+# on_presence_update sẽ không bắn và member.activities/member.voice sẽ rỗng.
+# Dùng cho cogs/study_reminder.py:
+intents.presences = True       # đọc được activity (đang chơi game gì)
+intents.members = True         # presence data cần intent này đi kèm mới đầy đủ
+intents.voice_states = True    # đọc được member.voice.channel (có đang ở voice không)
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -47,6 +55,7 @@ INITIAL_EXTENSIONS = [
     "cogs.guess",
     "cogs.blur_guess",
     "cogs.farewell",
+    "cogs.study_reminder",
 ]
 
 
@@ -64,7 +73,7 @@ async def main() -> None:
 
     async with bot:
         # Gắn kết nối DB dùng chung vào bot instance — các cog truy cập qua
-        # self.bot.db (xem cogs/farewell.py + db/farewell_repository.py).
+        # self.bot.db (xem cogs/farewell.py, cogs/study_reminder.py).
         bot.db = await init_db(config.SQLITE_DB_PATH)
         try:
             for extension in INITIAL_EXTENSIONS:

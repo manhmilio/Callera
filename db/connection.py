@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS farewell_messages (
     updated_at TEXT    NOT NULL,
     PRIMARY KEY (guild_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS study_reminder_config (
+    id                 INTEGER PRIMARY KEY CHECK (id = 1),
+    reminder_channel_id INTEGER,
+    audio_file_path     TEXT
+);
 """
 
 
@@ -27,7 +33,7 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     xuống cho các cog cần dùng qua `self.bot.db`.
     """
     conn = await aiosqlite.connect(db_path)
-    await conn.execute(_SCHEMA)
+    await conn.executescript(_SCHEMA)
     await conn.commit()
     return conn
 
