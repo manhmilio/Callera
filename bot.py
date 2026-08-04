@@ -22,8 +22,9 @@ logging.basicConfig(level=logging.INFO)
 
 intents = discord.Intents.default()
 # Cần bật "MESSAGE CONTENT INTENT" trong Discord Developer Portal > Bot,
-# nếu không /guess_location và /blur_guess sẽ không đọc được nội dung tin
-# nhắn người chơi gõ để đoán.
+# nếu không /guess_location, /blur_guess sẽ không đọc được nội dung tin
+# nhắn người chơi gõ để đoán, và cogs/ask.py cũng không đọc được câu hỏi
+# khi bị tag.
 intents.message_content = True
 
 # 3 intent dưới đây đều là Privileged Gateway Intent — phải bật thủ công ở
@@ -47,6 +48,12 @@ bot.image_aggregator = ImageAggregator(
     ]
 )
 
+# API key cho tính năng hỏi đáp (cogs/ask.py + services/qa_service.py) — gắn
+# thẳng vào bot instance theo đúng pattern của image_aggregator ở trên. Nếu
+# rỗng, AskCog.setup() sẽ tự log warning và bỏ qua việc load cog thay vì làm
+# crash bot.
+bot.gemini_api_key = config.GEMINI_API_KEY
+
 # Danh sách cogs cần load — thêm tính năng mới = thêm 1 dòng ở đây.
 INITIAL_EXTENSIONS = [
     "cogs.photo",
@@ -56,6 +63,7 @@ INITIAL_EXTENSIONS = [
     "cogs.blur_guess",
     "cogs.farewell",
     "cogs.study_reminder",
+    "cogs.ask",
 ]
 
 
@@ -64,6 +72,8 @@ async def on_ready():
     await bot.tree.sync()
     active_sources = [s.name for s in bot.image_aggregator.available_services()]
     print(f"Đã đăng nhập với tên {bot.user}. Nguồn ảnh đang bật: {', '.join(active_sources) or 'KHÔNG CÓ'}")
+    if not config.GEMINI_API_KEY:
+        print("Lưu ý: chưa cấu hình GEMINI_API_KEY — tính năng hỏi đáp (tag bot) đang tắt.")
 
 
 async def main() -> None:
