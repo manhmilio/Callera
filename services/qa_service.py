@@ -4,6 +4,15 @@ phải google-generativeai đã deprecated), kèm Google Search Grounding để 
 trả lời có thể tham chiếu thông tin mới nhất trên web thay vì chỉ dựa vào
 dữ liệu huấn luyện tĩnh của model.
 
+Bản cập nhật này:
+- Bỏ hẳn việc trích xuất/trả về nguồn tham khảo (không hiển thị link nữa,
+  chỉ dùng grounding ngầm để câu trả lời chính xác/cập nhật hơn).
+- Trả lời ngắn gọn hơn (giới hạn qua system prompt + max_output_tokens).
+- Thêm cá tính: xưng "tao/mày", cà khịa/chửi nhẹ khi câu hỏi ngu/spam/troll,
+  nhưng vẫn trả lời tử tế, chính xác khi câu hỏi nghiêm túc. Không xúc phạm
+  dựa trên giới tính/chủng tộc/tôn giáo/khuyết tật hay đặc điểm cá nhân
+  nhạy cảm khác — chỉ cà khịa nội dung câu hỏi.
+
 Cài đặt:
     pip install google-genai
 
@@ -21,6 +30,35 @@ from __future__ import annotations
 from google import genai
 from google.genai import types
 
+# System prompt định hình cá tính + độ dài câu trả lời của bot.
+# Sửa nội dung ở đây nếu muốn chỉnh giọng điệu (gắt hơn/nhẹ hơn).
+SYSTEM_INSTRUCTION = """\
+Bạn là Callera, bot trả lời câu hỏi cho một server Discord cộng đồng tiếng Việt.
+
+QUY TẮC VỀ ĐỘ DÀI:
+- Trả lời NGẮN GỌN, đi thẳng vào vấn đề, tối đa khoảng 3-4 câu.
+- Chỉ nói dài hơn một chút nếu câu hỏi thực sự cần liệt kê nhiều bước/nhiều \
+mục, nhưng vẫn phải súc tích, không lan man, không giải thích thừa.
+
+QUY TẮC VỀ GIỌNG ĐIỆU (tuỳ theo câu hỏi):
+- Xưng "tao", gọi người hỏi là "mày".
+- Nếu câu hỏi BÌNH THƯỜNG, nghiêm túc, có nội dung rõ ràng: trả lời tử tế, \
+đúng trọng tâm, không cần chửi bới gì cả, chỉ cần ngắn gọn và chính xác.
+- Nếu câu hỏi NGU NGỐC, SPAM, VÔ NGHĨA, TROLL, cố tình chọc bot, hỏi bậy bạ \
+không có nội dung để trả lời: được phép cà khịa, mỉa mai, chửi nhẹ (kiểu \
+"súc vật", "khốn nạn", "óc chó", "ngu vậy cũng hỏi được") trước khi (hoặc \
+thay vì) trả lời.
+- KHÔNG BAO GIỜ chửi/xúc phạm dựa trên giới tính, chủng tộc, tôn giáo, \
+khuyết tật, xu hướng tính dục, hoặc bất kỳ đặc điểm cá nhân nhạy cảm nào của \
+người hỏi. Chỉ cà khịa NỘI DUNG câu hỏi (ngu/spam/vô nghĩa), không tấn công \
+danh tính người hỏi.
+- Không chửi thề trong MỌI câu trả lời — chỉ dùng khi câu hỏi thực sự đáng \
+bị cà khịa theo quy tắc trên. Câu hỏi tử tế thì đáp lại tử tế.
+- Luôn trả lời bằng tiếng Việt.
+"""
+
+MAX_OUTPUT_TOKENS = 300  # giới hạn thêm để ép câu trả lời không bị dài dòng
+
 
 class GeminiQAService:
     """Gọi Gemini API để trả lời 1 câu hỏi, có bật Google Search Grounding."""
@@ -34,14 +72,18 @@ class GeminiQAService:
         self.model_name = model_name
         self._grounding_tool = types.Tool(google_search=types.GoogleSearch())
 
-    async def ask(self, question: str) -> tuple[str, list[str]]:
+    async def ask(self, question: str) -> str:
         """
-        Gửi câu hỏi tới Gemini, trả về (câu trả lời, danh sách nguồn tham khảo).
+        Gửi câu hỏi tới Gemini, trả về câu trả lời (đã bỏ nguồn tham khảo).
 
         Ném exception nếu gọi API lỗi (hết quota, mất mạng, sai key...) —
         cog gọi hàm này cần tự bắt exception để báo người dùng phù hợp.
         """
-        config = types.GenerateContentConfig(tools=[self._grounding_tool])
+        config = types.GenerateContentConfig(
+            tools=[self._grounding_tool],
+            system_instruction=SYSTEM_INSTRUCTION,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
         response = await self.client.aio.models.generate_content(
             model=self.model_name,
             contents=question,
@@ -50,26 +92,6 @@ class GeminiQAService:
 
         answer = (response.text or "").strip()
         if not answer:
-            answer = "Xin lỗi, mình không tạo được câu trả lời cho câu hỏi này."
+            answer = "Hỏi cái kiểu gì mà tao không trả lời được vậy, hỏi lại đi."
 
-        sources = self._extract_sources(response)
-        return answer, sources
-
-    @staticmethod
-    def _extract_sources(response) -> list[str]:
-        """Lấy tối đa 3 link nguồn từ grounding_metadata (nếu Gemini có search)."""
-        sources: list[str] = []
-        try:
-            candidate = response.candidates[0]
-            chunks = candidate.grounding_metadata.grounding_chunks or []
-            for chunk in chunks:
-                web = getattr(chunk, "web", None)
-                uri = getattr(web, "uri", None) if web else None
-                if uri and uri not in sources:
-                    sources.append(uri)
-                if len(sources) >= 3:
-                    break
-        except (AttributeError, IndexError, TypeError):
-            # Không có grounding_metadata (câu hỏi không cần search) — bỏ qua.
-            pass
-        return sources
+        return answer

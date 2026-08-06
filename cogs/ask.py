@@ -4,6 +4,10 @@ bằng Gemini API (bật Google Search Grounding để có thông tin cập nh�
 
 Cách dùng trong Discord:
     @Callera thủ đô của Nhật Bản là gì?
+
+Bản cập nhật này: bỏ hiển thị "Nguồn tham khảo" trong embed (qa_service.ask()
+giờ chỉ trả về str thay vì tuple), câu trả lời cũng ngắn gọn hơn do đã chỉnh
+ở qa_service.py.
 """
 
 from __future__ import annotations
@@ -56,15 +60,15 @@ class AskCog(commands.Cog):
 
         cached = self.rate_limiter.get_cached(question)
         if cached is not None:
-            answer, sources = cached
-            await message.reply(embed=self._build_embed(answer, sources, cached=True))
+            answer, _sources = cached
+            await message.reply(embed=self._build_embed(answer, cached=True))
             return
 
         self.rate_limiter.mark_asked(message.author.id)
 
         async with message.channel.typing():
             try:
-                answer, sources = await self.qa_service.ask(question)
+                answer = await self.qa_service.ask(question)
             except Exception:
                 logger.exception(
                     "Lỗi khi gọi Gemini API cho câu hỏi: %s", question
@@ -75,8 +79,11 @@ class AskCog(commands.Cog):
                 )
                 return
 
-        self.rate_limiter.set_cached(question, answer, sources)
-        await message.reply(embed=self._build_embed(answer, sources))
+        # QaRateLimiter.set_cached hiện vẫn nhận tham số sources (list) để
+        # không phải sửa file utils/qa_ratelimit.py — luôn truyền [] vì bot
+        # không còn hiển thị nguồn tham khảo nữa.
+        self.rate_limiter.set_cached(question, answer, [])
+        await message.reply(embed=self._build_embed(answer))
 
     def _extract_question(self, message: discord.Message) -> str:
         """Bỏ phần tag @bot khỏi nội dung tin nhắn, trả về câu hỏi thuần."""
@@ -86,15 +93,9 @@ class AskCog(commands.Cog):
             content = content.replace(f"<@!{mention.id}>", "")
         return content.strip()
 
-    def _build_embed(
-        self, answer: str, sources: list[str], cached: bool = False
-    ) -> discord.Embed:
+    def _build_embed(self, answer: str, cached: bool = False) -> discord.Embed:
         description = answer[:MAX_EMBED_DESCRIPTION]
         embed = discord.Embed(description=description, color=discord.Color.blue())
-        if sources:
-            embed.add_field(
-                name="Nguồn tham khảo", value="\n".join(sources), inline=False
-            )
         footer = "Câu trả lời do AI tạo, có thể không chính xác 100%."
         if cached:
             footer += " (đã lưu tạm cho câu hỏi giống trước đó)"
