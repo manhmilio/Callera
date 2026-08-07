@@ -1,15 +1,18 @@
 """
 Cog cho tính năng hỏi đáp: tag bot (@Callera) kèm câu hỏi -> bot trả lời
-bằng Gemini API (bật Google Search Grounding để có thông tin cập nhật).
+bằng QAAggregator (thử Gemini + Google Search Grounding trước, tự động
+fallback sang Groq Compound nếu Gemini bị rate limit/lỗi).
 
 Cách dùng trong Discord:
     @Callera thủ đô của Nhật Bản là gì?
 
-Bản cập nhật này: bỏ hiển thị "Nguồn tham khảo" trong embed (qa_service.ask()
-giờ chỉ trả về str thay vì tuple), câu trả lời cũng ngắn gọn hơn do đã chỉnh
-ở qa_service.py. Thêm memory tạm theo từng user (utils/qa_memory.QaMemory) để
-bot nhớ vài lượt hỏi-đáp gần nhất, trả lời được câu hỏi nối tiếp — kèm slash
-command `/quen_di` để user tự xoá lịch sử hội thoại của chính mình.
+Bản cập nhật này: đổi từ dùng thẳng GeminiQAService sang dùng QAAggregator
+(services/qa_aggregator.py) — giúp tăng tổng quota khả dụng bằng cách cộng
+gộp 2 nguồn (Gemini free tier ~10 RPM/250 RPD quá thấp, dễ nghẽn khi nhiều
+người cùng hỏi). Toàn bộ phần logic on_message/rate limit/memory GIỮ
+NGUYÊN không đổi, vì QAAggregator implement cùng interface `.ask()` như
+GeminiQAService trước đây — cog không cần biết bên dưới đang có bao nhiêu
+nguồn hay có đang fallback hay không.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from services.qa_service import GeminiQAService
+from services.qa_aggregator import QAAggregator
 from utils.qa_memory import QaMemory
 from utils.qa_ratelimit import QaRateLimiter
 
@@ -34,7 +37,7 @@ MEMORY_TTL_SECONDS = 900.0  # tự quên nếu 15 phút không hỏi tiếp
 
 
 class AskCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, qa_service: GeminiQAService):
+    def __init__(self, bot: commands.Bot, qa_service: QAAggregator):
         self.bot = bot
         self.qa_service = qa_service
         self.rate_limiter = QaRateLimiter(
@@ -85,7 +88,7 @@ class AskCog(commands.Cog):
                 answer = await self.qa_service.ask(question, history=history)
             except Exception:
                 logger.exception(
-                    "Lỗi khi gọi Gemini API cho câu hỏi: %s", question
+                    "Lỗi khi gọi QAAggregator cho câu hỏi: %s", question
                 )
                 await message.reply(
                     "Xin lỗi, mình đang gặp lỗi hoặc hết quota tạm thời, "
@@ -131,12 +134,11 @@ class AskCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot) -> None:
-    api_key = getattr(bot, "gemini_api_key", None)
-    if not api_key:
+    qa_service = getattr(bot, "qa_service", None)
+    if qa_service is None or not qa_service.is_configured():
         logger.warning(
-            "GEMINI_API_KEY chưa được cấu hình trong config.py/.env — "
-            "bỏ qua load AskCog."
+            "Chưa cấu hình GEMINI_API_KEY hay GROQ_API_KEY nào trong "
+            "config.py/.env — bỏ qua load AskCog."
         )
         return
-    qa_service = GeminiQAService(api_key=api_key)
     await bot.add_cog(AskCog(bot, qa_service))

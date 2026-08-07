@@ -17,8 +17,17 @@ PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY")
 
 # Dùng cho cogs/ask.py (tính năng hỏi đáp qua tag bot) — services/qa_service.py.
 # Lấy key miễn phí tại https://aistudio.google.com/apikey. Nếu để trống,
-# AskCog sẽ tự bỏ qua việc load (không làm crash bot).
+# QAAggregator sẽ tự bỏ qua nguồn này (xem GROQ_API_KEY bên dưới để biết
+# nguồn dự phòng).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Dùng cho services/groq_qa_service.py — nguồn hỏi đáp DỰ PHÒNG, tự động
+# được QAAggregator gọi tới khi GEMINI_API_KEY bị rate limit/lỗi (free tier
+# Gemini chỉ ~10 requests/phút, 250 requests/ngày, rất dễ nghẽn khi nhiều
+# người cùng hỏi). Lấy key miễn phí, không cần thẻ tín dụng, tại
+# https://console.groq.com/keys. Nếu để trống, tính năng hỏi đáp vẫn chạy
+# bình thường bằng mình Gemini (không bắt buộc phải có cả 2 key).
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Đường dẫn file SQLite dùng cho module farewell (db/connection.py).
 # Mặc định nằm trong thư mục data/ — thư mục này được mount qua Docker volume
