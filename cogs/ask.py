@@ -7,7 +7,9 @@ Cách dùng trong Discord:
 
 Bản cập nhật này: bỏ hiển thị "Nguồn tham khảo" trong embed (qa_service.ask()
 giờ chỉ trả về str thay vì tuple), câu trả lời cũng ngắn gọn hơn do đã chỉnh
-ở qa_service.py.
+ở qa_service.py. Thêm memory tạm theo từng user (utils/qa_memory.QaMemory) để
+bot nhớ vài lượt hỏi-đáp gần nhất, trả lời được câu hỏi nối tiếp — kèm slash
+command `/quen_di` để user tự xoá lịch sử hội thoại của chính mình.
 """
 
 from __future__ import annotations
@@ -15,9 +17,11 @@ from __future__ import annotations
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from services.qa_service import GeminiQAService
+from utils.qa_memory import QaMemory
 from utils.qa_ratelimit import QaRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,8 @@ logger = logging.getLogger(__name__)
 MAX_EMBED_DESCRIPTION = 4096  # giới hạn ký tự của Discord embed description
 USER_COOLDOWN_SECONDS = 10.0
 CACHE_TTL_SECONDS = 600.0
+MEMORY_MAX_TURNS = 5  # nhớ tối đa 5 lượt hỏi-đáp gần nhất mỗi user
+MEMORY_TTL_SECONDS = 900.0  # tự quên nếu 15 phút không hỏi tiếp
 
 
 class AskCog(commands.Cog):
@@ -34,6 +40,9 @@ class AskCog(commands.Cog):
         self.rate_limiter = QaRateLimiter(
             user_cooldown_seconds=USER_COOLDOWN_SECONDS,
             cache_ttl_seconds=CACHE_TTL_SECONDS,
+        )
+        self.memory = QaMemory(
+            max_turns=MEMORY_MAX_TURNS, ttl_seconds=MEMORY_TTL_SECONDS
         )
 
     @commands.Cog.listener()
@@ -61,14 +70,19 @@ class AskCog(commands.Cog):
         cached = self.rate_limiter.get_cached(question)
         if cached is not None:
             answer, _sources = cached
+            # Vẫn ghi vào memory của user để các câu hỏi nối tiếp sau đó
+            # (dù câu này trả lời từ cache chung) vẫn có ngữ cảnh đúng.
+            self.memory.add_turn(message.author.id, question, answer)
             await message.reply(embed=self._build_embed(answer, cached=True))
             return
 
         self.rate_limiter.mark_asked(message.author.id)
 
+        history = self.memory.get_history(message.author.id)
+
         async with message.channel.typing():
             try:
-                answer = await self.qa_service.ask(question)
+                answer = await self.qa_service.ask(question, history=history)
             except Exception:
                 logger.exception(
                     "Lỗi khi gọi Gemini API cho câu hỏi: %s", question
@@ -83,7 +97,20 @@ class AskCog(commands.Cog):
         # không phải sửa file utils/qa_ratelimit.py — luôn truyền [] vì bot
         # không còn hiển thị nguồn tham khảo nữa.
         self.rate_limiter.set_cached(question, answer, [])
+        self.memory.add_turn(message.author.id, question, answer)
         await message.reply(embed=self._build_embed(answer))
+
+    @app_commands.command(
+        name="quen_di",
+        description="Xoá lịch sử hỏi-đáp tạm của bạn với bot (ngữ cảnh hội thoại)",
+    )
+    async def quen_di(self, interaction: discord.Interaction) -> None:
+        had_something = self.memory.clear(interaction.user.id)
+        if had_something:
+            message = "Đã quên hết rồi, coi như lần đầu gặp mày."
+        else:
+            message = "Có gì đâu mà quên, tao có nhớ gì mày đâu."
+        await interaction.response.send_message(message, ephemeral=True)
 
     def _extract_question(self, message: discord.Message) -> str:
         """Bỏ phần tag @bot khỏi nội dung tin nhắn, trả về câu hỏi thuần."""
