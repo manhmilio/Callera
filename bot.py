@@ -66,6 +66,9 @@ bot.qa_service = QAAggregator(
 )
 
 # Danh sách cogs cần load — thêm tính năng mới = thêm 1 dòng ở đây.
+# Lưu ý: "cogs.personality" load TRƯỚC "cogs.ask" (không bắt buộc về mặt kỹ
+# thuật vì AskCog tra cứu PersonalityCog qua self.bot.get_cog() lúc runtime,
+# không phải lúc load — nhưng đặt trước cho dễ đọc, đúng thứ tự phụ thuộc).
 INITIAL_EXTENSIONS = [
     "cogs.photo",
     "cogs.rating",
@@ -74,6 +77,7 @@ INITIAL_EXTENSIONS = [
     "cogs.blur_guess",
     "cogs.farewell",
     "cogs.study_reminder",
+    "cogs.personality",
     "cogs.ask",
 ]
 
@@ -100,7 +104,8 @@ async def main() -> None:
 
     async with bot:
         # Gắn kết nối DB dùng chung vào bot instance — các cog truy cập qua
-        # self.bot.db (xem cogs/farewell.py, cogs/study_reminder.py).
+        # self.bot.db (xem cogs/farewell.py, cogs/study_reminder.py,
+        # cogs/personality.py).
         bot.db = await init_db(config.SQLITE_DB_PATH)
         try:
             for extension in INITIAL_EXTENSIONS:

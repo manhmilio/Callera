@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS study_reminder_config (
     reminder_channel_id INTEGER,
     audio_file_path     TEXT
 );
+
+CREATE TABLE IF NOT EXISTS personality_config (
+    guild_id INTEGER PRIMARY KEY,
+    persona  TEXT NOT NULL DEFAULT 'lao'
+);
 """
 
 

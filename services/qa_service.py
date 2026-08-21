@@ -7,8 +7,15 @@ dữ liệu huấn luyện tĩnh của model.
 Bản cập nhật này: implement interface QAService (services/qa_base.py) để
 có thể cắm vào QAAggregator cùng GroqCompoundQAService — khi Gemini bị rate
 limit (free tier chỉ ~10 requests/phút, 250 requests/ngày) thì tự động
-fallback sang Groq Compound thay vì báo lỗi luôn cho người dùng. Không đổi
-gì về cá tính/hành vi trả lời so với trước.
+fallback sang Groq Compound thay vì báo lỗi luôn cho người dùng.
+
+Bản cập nhật (tính năng đổi persona): KHÔNG còn giữ 1 bản cá tính
+SYSTEM_INSTRUCTION hard-code cố định trong file này nữa. `ask()` giờ nhận
+thêm tham số `system_prompt` — do cogs/ask.py truyền xuống theo persona
+đang được chọn cho từng guild (xem cogs/personality.py, data/personas.py).
+Nếu không truyền `system_prompt` (vd gọi trực tiếp service này để test),
+tự fallback về persona mặc định ("lao") lấy từ data/personas.py — đảm bảo
+hành vi không đổi nếu ai đó gọi ask() kiểu cũ mà quên truyền persona.
 
 Cài đặt:
     pip install google-genai
@@ -27,48 +34,12 @@ from __future__ import annotations
 from google import genai
 from google.genai import types
 
+from data.personas import DEFAULT_PERSONA, get_persona
 from services.qa_base import QAService, QAServiceError
 
-# System prompt định hình cá tính + độ dài câu trả lời của bot.
-# Sửa nội dung ở đây nếu muốn chỉnh giọng điệu (gắt hơn/nhẹ hơn).
-SYSTEM_INSTRUCTION = """\
-Bạn là Callera, bot trả lời câu hỏi cho một server Discord cộng đồng tiếng Việt.
-
-QUY TẮC VỀ ĐỘ DÀI:
-- Trả lời NGẮN GỌN, đi thẳng vào vấn đề, tối đa khoảng 3-4 câu.
-- Chỉ nói dài hơn một chút nếu câu hỏi thực sự cần liệt kê nhiều bước/nhiều \
-mục, nhưng vẫn phải súc tích, không lan man, không giải thích thừa.
-
-QUY TẮC VỀ GIỌNG ĐIỆU (tuỳ theo câu hỏi):
-- Xưng "tao", gọi người hỏi là "mày".
-- Nếu câu hỏi BÌNH THƯỜNG, nghiêm túc, có nội dung rõ ràng: trả lời tử tế, \
-đúng trọng tâm, không cần chửi bới gì cả, chỉ cần ngắn gọn và chính xác.
-- Nếu câu hỏi NGU NGỐC, SPAM, VÔ NGHĨA, TROLL, cố tình chọc bot, hỏi bậy bạ \
-không có nội dung để trả lời: ƯU TIÊN cà khịa theo kiểu "văn thơ", khéo, có \
-duyên — thay vì chửi thẳng mặt. Vài cách làm:
-  + Chèn danh nhân/nhân vật lịch sử làm đòn bẩy mỉa mai, kiểu: "mày sống \
-thế này Bác Hồ mà biết được chắc buồn lắm", "Quang Trung đại phá quân Thanh \
-mà nghe mày hỏi câu này chắc phải đại phá luôn cái câu hỏi", "Trạng Trình \
-sống lại nghe câu này cũng phải bó tay chịu trận".
-  + Chèn ca dao/tục ngữ/thành ngữ bẻ lái sang tình huống hiện tại cho hài, \
-kiểu vần vè, có nhịp điệu.
-  + Mỉa mai kiểu ví von, so sánh khoa trương ("hỏi mà như đang thi ai ngu \
-hơn ai").
-  - Chỉ dùng chửi thẳng nhẹ (kiểu "súc vật", "khốn nạn", "óc chó") như một \
-GIA VỊ THÊM, không phải công cụ chính — ưu tiên câu cà khịa có vần có \
-duyên hơn là chửi trần trụi.
-  - Khi nhắc tới danh nhân/nhân vật lịch sử: chỉ dùng họ làm đòn bẩy để cà \
-khịa NGƯỜI HỎI, tuyệt đối không bịa chuyện, không gán câu nói/hành động sai \
-sự thật cho họ, không hạ thấp hay xúc phạm chính nhân vật đó — họ chỉ đóng \
-vai "tấm gương" để soi vào sự ngu/lười của người hỏi thôi.
-- KHÔNG BAO GIỜ chửi/xúc phạm dựa trên giới tính, chủng tộc, tôn giáo, \
-khuyết tật, xu hướng tính dục, hoặc bất kỳ đặc điểm cá nhân nhạy cảm nào của \
-người hỏi. Chỉ cà khịa NỘI DUNG câu hỏi (ngu/spam/vô nghĩa), không tấn công \
-danh tính người hỏi.
-- Không chửi thề trong MỌI câu trả lời — chỉ dùng khi câu hỏi thực sự đáng \
-bị cà khịa theo quy tắc trên. Câu hỏi tử tế thì đáp lại tử tế.
-- Luôn trả lời bằng tiếng Việt.
-"""
+# Fallback khi ask() không được truyền system_prompt — lấy từ persona mặc
+# định trong data/personas.py, KHÔNG hard-code cá tính riêng ở đây nữa.
+DEFAULT_SYSTEM_INSTRUCTION = get_persona(DEFAULT_PERSONA)["system_prompt"]
 
 MAX_OUTPUT_TOKENS = 300  # giới hạn thêm để ép câu trả lời không bị dài dòng
 
@@ -94,6 +65,7 @@ class GeminiQAService(QAService):
         self,
         question: str,
         history: list[tuple[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> str:
         """
         Gửi câu hỏi tới Gemini, trả về câu trả lời (đã bỏ nguồn tham khảo).
@@ -102,6 +74,11 @@ class GeminiQAService(QAService):
         của chính user đó (thứ tự cũ -> mới), lấy từ QaMemory bên ngoài, để
         model hiểu được câu hỏi nối tiếp (ví dụ "còn cái kia thì sao?").
         Bỏ trống hoặc None nếu không có/không cần ngữ cảnh trước.
+
+        `system_prompt`: system instruction quyết định cá tính/giọng điệu
+        trả lời — do cogs/ask.py truyền xuống theo persona đang chọn cho
+        guild (xem cogs/personality.py). Nếu None, dùng
+        DEFAULT_SYSTEM_INSTRUCTION (persona "lao" mặc định).
 
         Ném QAServiceError nếu chưa cấu hình key, hoặc để lỗi gốc của
         google-genai (hết quota, mất mạng, sai key...) bay lên nguyên vẹn —
@@ -114,7 +91,7 @@ class GeminiQAService(QAService):
 
         config = types.GenerateContentConfig(
             tools=[self._grounding_tool],
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=system_prompt or DEFAULT_SYSTEM_INSTRUCTION,
             max_output_tokens=MAX_OUTPUT_TOKENS,
         )
 

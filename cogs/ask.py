@@ -6,13 +6,19 @@ fallback sang Groq Compound nếu Gemini bị rate limit/lỗi).
 Cách dùng trong Discord:
     @Callera thủ đô của Nhật Bản là gì?
 
-Bản cập nhật này: đổi từ dùng thẳng GeminiQAService sang dùng QAAggregator
-(services/qa_aggregator.py) — giúp tăng tổng quota khả dụng bằng cách cộng
-gộp 2 nguồn (Gemini free tier ~10 RPM/250 RPD quá thấp, dễ nghẽn khi nhiều
-người cùng hỏi). Toàn bộ phần logic on_message/rate limit/memory GIỮ
-NGUYÊN không đổi, vì QAAggregator implement cùng interface `.ask()` như
-GeminiQAService trước đây — cog không cần biết bên dưới đang có bao nhiêu
-nguồn hay có đang fallback hay không.
+Bản cập nhật này: đọc system prompt ĐỘNG theo tính cách (persona) đang được
+chọn cho từng guild (xem cogs/personality.py, đổi qua slash command
+/personality), thay vì cá tính hard-code cố định. Nếu PersonalityCog chưa
+load được vì lý do gì đó, tự fallback về persona mặc định
+(data.personas.DEFAULT_PERSONA) để tính năng hỏi đáp không bao giờ crash.
+
+LƯU Ý QUAN TRỌNG (cần đối chiếu với code thật của bạn):
+QAAggregator.ask() / GeminiQAService.ask() / GroqCompoundQAService.ask()
+cần nhận thêm tham số `system_prompt: str` và dùng nó khi build request,
+thay vì có cá tính hard-code sẵn bên trong service như trước. Nếu các
+service này hiện đang hard-code cá tính ở đâu đó (system instruction cố
+định trong qa_service.py/groq_qa_service.py), cần dọn cá tính cứng đó ra,
+để cog truyền `system_prompt` xuống mỗi lần gọi.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from data.personas import DEFAULT_PERSONA, get_persona
 from services.qa_aggregator import QAAggregator
 from utils.qa_memory import QaMemory
 from utils.qa_ratelimit import QaRateLimiter
@@ -48,6 +55,19 @@ class AskCog(commands.Cog):
             max_turns=MEMORY_MAX_TURNS, ttl_seconds=MEMORY_TTL_SECONDS
         )
 
+    async def _get_persona(self, guild_id: int | None) -> tuple[str, str]:
+        """Trả về (persona_key, system_prompt) hiện tại cho guild.
+
+        Đọc qua PersonalityCog nếu cog đó đã load; fallback về persona mặc
+        định nếu chưa có (vd cogs.personality lỡ chưa được thêm vào
+        INITIAL_EXTENSIONS, hoặc lệnh gọi từ DM không có guild).
+        """
+        personality_cog = self.bot.get_cog("PersonalityCog")
+        if personality_cog is None:
+            return DEFAULT_PERSONA, get_persona(DEFAULT_PERSONA)["system_prompt"]
+        key = await personality_cog.get_current_persona_key(guild_id)
+        return key, get_persona(key)["system_prompt"]
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
@@ -70,7 +90,15 @@ class AskCog(commands.Cog):
             )
             return
 
-        cached = self.rate_limiter.get_cached(question)
+        guild_id = message.guild.id if message.guild else None
+        persona_key, system_prompt = await self._get_persona(guild_id)
+
+        # Ghép persona_key vào cache key: cùng 1 câu hỏi nhưng khác tính
+        # cách (khác guild, hoặc guild đổi persona) sẽ KHÔNG dùng chung
+        # cache, tránh trả lời sai giọng văn so với persona đang chọn.
+        cache_key = f"{persona_key}:{question}"
+
+        cached = self.rate_limiter.get_cached(cache_key)
         if cached is not None:
             answer, _sources = cached
             # Vẫn ghi vào memory của user để các câu hỏi nối tiếp sau đó
@@ -85,7 +113,9 @@ class AskCog(commands.Cog):
 
         async with message.channel.typing():
             try:
-                answer = await self.qa_service.ask(question, history=history)
+                answer = await self.qa_service.ask(
+                    question, history=history, system_prompt=system_prompt
+                )
             except Exception:
                 logger.exception(
                     "Lỗi khi gọi QAAggregator cho câu hỏi: %s", question
@@ -99,7 +129,7 @@ class AskCog(commands.Cog):
         # QaRateLimiter.set_cached hiện vẫn nhận tham số sources (list) để
         # không phải sửa file utils/qa_ratelimit.py — luôn truyền [] vì bot
         # không còn hiển thị nguồn tham khảo nữa.
-        self.rate_limiter.set_cached(question, answer, [])
+        self.rate_limiter.set_cached(cache_key, answer, [])
         self.memory.add_turn(message.author.id, question, answer)
         await message.reply(embed=self._build_embed(answer))
 

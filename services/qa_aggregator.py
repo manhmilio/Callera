@@ -16,8 +16,15 @@ Cách dùng (trong bot.py), theo đúng pattern của bot.image_aggregator:
         GroqCompoundQAService(config.GROQ_API_KEY),
     ])
 
-cogs/ask.py chỉ cần gọi `await bot.qa_service.ask(question, history=history)`
-y hệt như khi dùng thẳng 1 QAService — không cần sửa gì thêm logic trong cog.
+cogs/ask.py gọi:
+
+    await bot.qa_service.ask(question, history=history, system_prompt=system_prompt)
+
+`system_prompt` (tính năng đổi persona) được truyền NGUYÊN VẸN xuống mọi
+service con — kể cả khi Gemini lỗi và phải fallback sang Groq, service dự
+phòng vẫn nhận đúng persona đang active cho guild đó, không bị "đổi giọng"
+giữa chừng. Nếu không truyền (None), mỗi service tự fallback về persona
+mặc định của riêng nó (xem services/qa_service.py, services/groq_qa_service.py).
 """
 
 from __future__ import annotations
@@ -45,11 +52,16 @@ class QAAggregator:
         self,
         question: str,
         history: list[tuple[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> str:
         """
         Thử từng service theo thứ tự ưu tiên, trả về câu trả lời của service
         đầu tiên thành công. Ném QAServiceError nếu không có service nào
         được cấu hình, hoặc tất cả service đều lỗi.
+
+        `system_prompt`: truyền nguyên vẹn xuống mọi service con (xem
+        docstring đầu file) — quyết định cá tính/giọng điệu trả lời theo
+        persona đang được chọn (cogs/personality.py).
         """
         available = self.available_services()
         if not available:
@@ -61,7 +73,9 @@ class QAAggregator:
         last_error: Exception | None = None
         for service in available:
             try:
-                return await service.ask(question, history=history)
+                return await service.ask(
+                    question, history=history, system_prompt=system_prompt
+                )
             except Exception as exc:  # noqa: BLE001 - cố ý bắt rộng để fallback
                 logger.warning(
                     "QAService '%s' lỗi (%s) — thử service tiếp theo nếu còn.",
