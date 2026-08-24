@@ -6,12 +6,9 @@ Phạm vi (theo yêu cầu đã chốt):
 - Gửi vào kênh chat TEXT gần nhất mà user vừa nhắn tin trước đó (không phải
   kênh cố định do admin cấu hình).
 - Nếu user chưa từng set lời tạm biệt, hoặc chưa từng nhắn tin ở kênh text
-  nào (tracker rỗng, ví dụ do bot vừa restart) → bỏ qua lặng lẽ, không gửi gì
-  cả, tránh làm phiền/gây lỗi khó hiểu.
-
-Đây là module MỚI, tách biệt hoàn toàn khỏi phần cog ảnh (`photo.py`,
-`rating.py`,...). Dùng chung interface `bot.db` (aiosqlite connection) được
-khởi tạo 1 lần ở `bot.py` qua `db/connection.py`.
+  nào (tracker rỗng, ví dụ do bot vừa restart) → bỏ qua lặng lẽ.
+- Có thể bật/tắt riêng theo từng server qua /toggle_feature ten:farewell
+  (xem cogs/feature_toggle.py). Mặc định BẬT nếu chưa từng cấu hình.
 """
 
 import logging
@@ -20,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db import farewell_repository
+from db import farewell_repository, feature_config_repository
 from utils.last_channel_tracker import LastChannelTracker
 
 logger = logging.getLogger(__name__)
@@ -59,6 +56,11 @@ class FarewellCog(commands.Cog):
 
         guild_id = member.guild.id
         user_id = member.id
+
+        if not await feature_config_repository.is_feature_enabled(
+            self.bot.db, guild_id, "farewell"
+        ):
+            return  # tính năng đang bị tắt cho server này
 
         message = await farewell_repository.get_farewell(
             self.bot.db, guild_id, user_id

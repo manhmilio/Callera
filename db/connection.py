@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS personality_config (
     guild_id INTEGER PRIMARY KEY,
     persona  TEXT NOT NULL DEFAULT 'lao'
 );
+
+CREATE TABLE IF NOT EXISTS feature_config (
+    guild_id INTEGER NOT NULL,
+    feature_name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (guild_id, feature_name)
+);
 """
 
 

@@ -1,29 +1,29 @@
 """
 cogs/study_reminder.py
 
-Nhắc nhở học tập khi user chơi game liên tục quá 1 tiếng.
+Nhắc nhở học tập khi user chơi game liên tục (đã gộp các khoảng nghỉ ngắn
+<=10 phút) quá 1 tiếng THỜI GIAN CHƠI THỰC.
 
 Luồng hoạt động:
-1. on_presence_update: phát hiện lúc 1 activity kiểu "Playing" xuất hiện/biến mất
-   khỏi member.activities -> mở/đóng 1 "phiên chơi game" trong utils.playtime_tracker.
-2. Task chạy mỗi 5 phút (check_playtime): duyệt các phiên đang mở, nếu phiên nào
-   đã chơi liên tục >= 1 tiếng và CHƯA được nhắc, thì:
-     - User đang ở trong 1 kênh voice -> bot join kênh đó, phát file audio đã
-       cấu hình sẵn (dùng chung cho mọi người, admin upload qua /set_study_audio).
-     - User không ở voice nào -> tag @user kèm lời nhắc vào kênh chat chung
-       (admin cấu hình qua /set_reminder_channel).
-3. Mỗi phiên chỉ nhắc đúng 1 lần (đánh dấu session["reminded"] = True).
-   Thoát game rồi chơi lại (cùng game hay game khác) = phiên mới -> nhắc lại được.
+1. on_presence_update: phát hiện activity "Playing" xuất hiện/biến mất khỏi
+   member.activities -> gọi utils.playtime_tracker để mở/tạm dừng/tiếp tục
+   phiên chơi. Nếu user dừng rồi chơi lại trong vòng 10 phút, phiên được
+   GỘP LẠI (không reset thời gian đã tích luỹ) — vì một số game có ngắt
+   nghỉ giữa chừng (loading, chuyển màn, thoát vào menu...) không nên bị
+   tính là "đã ngừng chơi".
+2. Task chạy mỗi 5 phút (check_playtime): duyệt các phiên đang mở, nếu tổng
+   thời gian chơi thực >= 1 tiếng và CHƯA được nhắc, thì gửi nhắc nhở (nếu
+   tính năng đang BẬT cho server đó — xem cogs/feature_toggle.py). Đồng
+   thời dọn các phiên đã nghỉ quá 10 phút (coi như kết thúc hẳn).
+3. Mỗi phiên (đã gộp) chỉ nhắc đúng 1 lần. Nghỉ quá 10 phút rồi chơi lại =
+   phiên mới -> nhắc lại được từ đầu.
 
 Yêu cầu thêm so với các cog khác:
-- Cần bật thêm intents.voice_states = True (bên cạnh intents.presences,
-  intents.members đã bật cho tính năng detect activity) trong bot.py, để
-  member.voice.channel đọc được chính xác.
-- Cần cài `PyNaCl` (pip install PyNaCl) để discord.py hỗ trợ voice.
-- Cần cài đặt FFmpeg ở máy chạy bot (không phải pip package — cài qua hệ
-  điều hành, vd `apt install ffmpeg` trên Ubuntu) để phát được file audio.
-- bot.db (kết nối SQLite) phải đã được gán sẵn trước khi cog này load,
-  giống cách farewell cog đang dùng.
+- intents.presences, intents.members, intents.voice_states phải bật (đã
+  cấu hình trong bot.py).
+- Cần cài `davey` (không phải `PyNaCl`/`dave.py`) để hỗ trợ voice + DAVE.
+- Cần cài FFmpeg ở máy chạy bot.
+- bot.db (kết nối SQLite) phải đã được gán sẵn trước khi cog này load.
 """
 
 import logging
@@ -35,7 +35,16 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from db.study_reminder_repository import get_config, set_reminder_channel, set_audio_path
-from utils.playtime_tracker import active_sessions, start_session, end_session
+from db import feature_config_repository
+from utils.playtime_tracker import (
+    active_sessions,
+    start_or_resume_session,
+    pause_session,
+    update_game_name,
+    get_total_playtime,
+    is_expired,
+    clear_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +75,7 @@ class StudyReminderCog(commands.Cog):
         self.check_playtime.cancel()
 
     # ------------------------------------------------------------------
-    # Theo dõi bắt đầu / kết thúc phiên chơi game
+    # Theo dõi bắt đầu / tạm dừng / tiếp tục phiên chơi game
     # ------------------------------------------------------------------
     @commands.Cog.listener()
     async def on_presence_update(self, before: discord.Member, after: discord.Member):
@@ -76,17 +85,23 @@ class StudyReminderCog(commands.Cog):
         before_games = _playing_game_names(before)
         after_games = _playing_game_names(after)
 
-        # Game mới xuất hiện trong activities -> mở phiên mới
-        for game in after_games - before_games:
-            start_session(after.id, game)
-            logger.info(f"[study_reminder] {after} bắt đầu chơi: {game}")
+        was_playing = bool(before_games)
+        now_playing = bool(after_games)
 
-        # Game vừa biến mất khỏi activities -> đóng phiên tương ứng
-        for game in before_games - after_games:
-            session = active_sessions.get(after.id)
-            if session and session["game"] == game:
-                end_session(after.id)
-                logger.info(f"[study_reminder] {after} dừng chơi: {game}")
+        if now_playing and not was_playing:
+            # Bắt đầu chơi (hoặc chơi lại sau khi nghỉ ngắn -> tự động gộp)
+            game_name = next(iter(after_games))
+            start_or_resume_session(after.id, game_name)
+            logger.info(f"[study_reminder] {after} bắt đầu/tiếp tục chơi: {game_name}")
+        elif was_playing and not now_playing:
+            # Dừng chơi -> vào trạng thái chờ gộp (tối đa 10 phút)
+            pause_session(after.id)
+            logger.info(f"[study_reminder] {after} tạm dừng chơi (chờ gộp tối đa 10 phút)")
+        elif now_playing and was_playing:
+            # Vẫn đang chơi nhưng đổi game -> chỉ cập nhật tên hiển thị,
+            # KHÔNG reset thời gian đã tích luỹ (vẫn tính là chơi liên tục).
+            game_name = next(iter(after_games))
+            update_game_name(after.id, game_name)
 
     # ------------------------------------------------------------------
     # Task định kỳ kiểm tra thời lượng chơi
@@ -95,16 +110,23 @@ class StudyReminderCog(commands.Cog):
     async def check_playtime(self):
         now = datetime.now(timezone.utc)
 
-        # Duyệt trên bản copy vì end_session() có thể làm thay đổi dict
-        # ngay trong lúc đang loop (user thoát game giữa chừng).
+        # Duyệt trên bản copy vì pause_session()/clear_session() có thể làm
+        # thay đổi dict ngay trong lúc đang loop.
         for user_id, session in list(active_sessions.items()):
-            if session["reminded"]:
-                continue
-            if now - session["start"] < STUDY_REMINDER_THRESHOLD:
+            if is_expired(session, now):
+                # Đã nghỉ quá 10 phút -> coi như kết thúc phiên thật sự
+                clear_session(user_id)
                 continue
 
-            await self._send_reminder(user_id, session["game"])
-            session["reminded"] = True
+            if session["reminded"]:
+                continue
+
+            if get_total_playtime(user_id) < STUDY_REMINDER_THRESHOLD:
+                continue
+
+            sent = await self._send_reminder(user_id, session["game"])
+            if sent:
+                session["reminded"] = True
 
     @check_playtime.before_loop
     async def before_check_playtime(self):
@@ -113,15 +135,22 @@ class StudyReminderCog(commands.Cog):
     # ------------------------------------------------------------------
     # Gửi nhắc nhở: join voice phát audio, hoặc tag vào kênh chat chung
     # ------------------------------------------------------------------
-    async def _send_reminder(self, user_id: int, game_name: str):
+    async def _send_reminder(self, user_id: int, game_name: str) -> bool:
         member = self._find_member(user_id)
         if member is None:
-            return
+            return False
+
+        enabled = await feature_config_repository.is_feature_enabled(
+            self.bot.db, member.guild.id, "study_reminder"
+        )
+        if not enabled:
+            return False
 
         if member.voice and member.voice.channel:
             await self._remind_via_voice(member)
         else:
             await self._remind_via_text(member)
+        return True
 
     def _find_member(self, user_id: int) -> discord.Member | None:
         for guild in self.bot.guilds:
