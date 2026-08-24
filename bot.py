@@ -77,10 +77,10 @@ INITIAL_EXTENSIONS = [
     "cogs.blur_guess",
     "cogs.farewell",
     "cogs.study_reminder",
+    "cogs.feature_toggle",
     "cogs.personality",
     "cogs.ask",
 ]
-
 
 @bot.event
 async def on_ready():
