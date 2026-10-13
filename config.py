@@ -29,6 +29,18 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # bình thường bằng mình Gemini (không bắt buộc phải có cả 2 key).
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Dùng cho HAI tính năng (cùng 1 key):
+#   1. services/vyce_image_service.py — nguồn DUY NHẤT của lệnh /gen_img
+#      (tạo ảnh bằng AI, model grok-imagine-2). Không có key này thì /gen_img
+#      tự tắt, các lệnh ảnh khác (/photo...) không bị ảnh hưởng.
+#   2. services/vyce_qa_service.py — nguồn hỏi đáp DỰ PHÒNG CUỐI CÙNG, gọi
+#      model DeepSeek. Chỉ được QAAggregator gọi tới khi CẢ Gemini lẫn Groq
+#      đều lỗi/hết quota — đặt cuối để không đốt credit cho mọi câu hỏi. Nếu
+#      để trống, hỏi đáp vẫn chạy bình thường bằng Gemini/Groq.
+# Vyce AI là API proxy tương thích OpenAI, TÍNH TIỀN THEO CREDIT (khác
+# Gemini/Groq có free tier). Lấy key tại https://vyceai.com.
+VYCE_API_KEY = os.getenv("VYCE_API_KEY")
+
 # Đường dẫn file SQLite dùng cho module farewell (db/connection.py).
 # Mặc định nằm trong thư mục data/ — thư mục này được mount qua Docker volume
 # (xem docker-compose.yml) để không mất dữ liệu khi container rebuild/xoá.

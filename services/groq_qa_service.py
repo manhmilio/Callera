@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import aiohttp
 
+from data.personas import DEFAULT_PERSONA, get_persona
 from services.qa_base import QAService, QAServiceError
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -40,20 +41,12 @@ DEFAULT_MODEL = "groq/compound"
 MAX_TOKENS = 400
 REQUEST_TIMEOUT_SECONDS = 30
 
-# Giữ tinh thần cá tính giống Gemini (tao/mày, cà khịa nhẹ câu hỏi ngu) để
-# người dùng không nhận ra bot đang "đổi não" khi bị fallback. Rút gọn hơn
-# 1 chút so với bản của Gemini — chỉnh lại nếu muốn 2 service giống hệt
-# nhau 100%.
-SYSTEM_INSTRUCTION = """\
-Bạn là Callera, bot trả lời câu hỏi cho một server Discord cộng đồng tiếng Việt.
-Trả lời NGẮN GỌN (tối đa 3-4 câu), đi thẳng vào vấn đề, luôn bằng tiếng Việt.
-Xưng "tao", gọi người hỏi là "mày". Câu hỏi nghiêm túc thì trả lời tử tế,
-chính xác. Câu hỏi ngu/spam/troll thì được phép cà khịa nhẹ nhàng, có duyên
-(dùng ca dao/tục ngữ/danh nhân lịch sử làm đòn bẩy mỉa mai NGƯỜI HỎI, không
-bịa chuyện hay xúc phạm chính nhân vật lịch sử đó), nhưng tuyệt đối không
-xúc phạm giới tính/chủng tộc/tôn giáo/khuyết tật hay đặc điểm cá nhân khác
-của người hỏi.
-"""
+# Fallback khi ask() không được truyền system_prompt (vd gọi trực tiếp
+# service này để test). Trước đây file này hard-code sẵn 1 bản cá tính
+# riêng, nhưng từ khi có tính năng đổi persona thì cá tính do cogs/ask.py
+# truyền xuống — giữ bản hard-code chỉ làm 2 service lệch giọng nhau, nên
+# lấy chung từ data/personas.py giống services/qa_service.py.
+DEFAULT_SYSTEM_INSTRUCTION = get_persona(DEFAULT_PERSONA)["system_prompt"]
 
 
 class GroqCompoundQAService(QAService):
@@ -72,20 +65,24 @@ class GroqCompoundQAService(QAService):
         self,
         question: str,
         history: list[tuple[str, str]] | None = None,
+        system_prompt: str | None = None,
     ) -> str:
         """
         Gửi câu hỏi tới Groq Compound, trả về câu trả lời dạng str.
 
+        `system_prompt`: persona đang active cho guild, do cogs/ask.py truyền
+        xuống qua QAAggregator. Nếu None, dùng DEFAULT_SYSTEM_INSTRUCTION.
+
         Ném QAServiceError nếu chưa cấu hình key, bị rate limit, lỗi HTTP,
         hoặc dữ liệu trả về không đúng định dạng — QAAggregator bắt lỗi
-        này để biết đã hết đường fallback.
+        này để thử service tiếp theo (Vyce) nếu còn.
         """
         if not self.is_configured():
             raise QAServiceError(
                 "GroqCompoundQAService chưa được cấu hình (thiếu GROQ_API_KEY)."
             )
 
-        messages = self._build_messages(question, history)
+        messages = self._build_messages(question, history, system_prompt)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -122,10 +119,14 @@ class GroqCompoundQAService(QAService):
 
     @staticmethod
     def _build_messages(
-        question: str, history: list[tuple[str, str]] | None
+        question: str,
+        history: list[tuple[str, str]] | None,
+        system_prompt: str | None,
     ) -> list[dict]:
         """Dựng list message theo format chat của OpenAI-compatible API."""
-        messages: list[dict] = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+        messages: list[dict] = [
+            {"role": "system", "content": system_prompt or DEFAULT_SYSTEM_INSTRUCTION}
+        ]
         for past_question, past_answer in history or []:
             messages.append({"role": "user", "content": past_question})
             messages.append({"role": "assistant", "content": past_answer})

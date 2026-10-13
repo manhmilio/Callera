@@ -19,6 +19,8 @@ from db.connection import close_db, init_db
 from services import ImageAggregator, UnsplashService, PexelsService, PixabayService
 from services.qa_service import GeminiQAService
 from services.groq_qa_service import GroqCompoundQAService
+from services.vyce_qa_service import VyceQAService
+from services.vyce_image_service import VyceImageService
 from services.qa_aggregator import QAAggregator
 
 logging.basicConfig(level=logging.INFO)
@@ -52,18 +54,33 @@ bot.image_aggregator = ImageAggregator(
 )
 
 # QAAggregator dùng chung cho tính năng hỏi đáp (cogs/ask.py) — theo đúng
-# pattern của image_aggregator ở trên. Thử Gemini trước (chất lượng cao
-# hơn, có Google Search Grounding), tự động fallback sang Groq Compound
-# (web search tích hợp sẵn, free tier RPM/RPD cao hơn Gemini nhiều lần) nếu
-# Gemini bị rate limit hoặc lỗi. Chỉ cần cấu hình tối thiểu 1 trong 2 API
-# key là tính năng hỏi đáp vẫn chạy được (không bắt buộc phải có đủ cả 2) —
-# AskCog.setup() tự kiểm tra qua qa_service.is_configured().
+# pattern của image_aggregator ở trên, nhưng thử LẦN LƯỢT theo thứ tự ưu
+# tiên dưới đây chứ không random:
+#   1. Gemini — chất lượng cao nhất, có Google Search Grounding. Free tier
+#      hẹp (~10 RPM / 250 RPD) nên dễ nghẽn khi đông người hỏi.
+#   2. Groq Compound — web search tích hợp sẵn, free tier RPM/RPD rộng hơn
+#      Gemini nhiều lần. Đỡ đạn khi Gemini hết quota.
+#   3. Vyce (DeepSeek) — chốt chặn cuối. Cố ý xếp cuối vì đây là nguồn DUY
+#      NHẤT tính tiền theo credit (2 nguồn trên free tier), và cũng là nguồn
+#      duy nhất KHÔNG có web search — câu trả lời chỉ dựa trên dữ liệu
+#      huấn luyện tĩnh. Chỉ đụng tới khi cả 2 nguồn miễn phí đều chết.
+# Chỉ cần cấu hình tối thiểu 1 trong 3 API key là tính năng hỏi đáp vẫn chạy
+# được (không bắt buộc đủ cả 3) — AskCog.setup() tự kiểm tra qua
+# qa_service.is_configured().
 bot.qa_service = QAAggregator(
     services=[
         GeminiQAService(config.GEMINI_API_KEY),
         GroqCompoundQAService(config.GROQ_API_KEY),
+        VyceQAService(config.VYCE_API_KEY),
     ]
 )
+
+# Service SINH ảnh bằng AI cho lệnh /gen_img (cogs/gen_image.py). Cố ý KHÔNG
+# nhét vào image_aggregator ở trên: aggregator kia TÌM ảnh có sẵn trong kho
+# miễn phí và được /photo, /random_photo, nút "Ảnh khác" gọi liên tục, còn
+# cái này SINH ảnh mới và tốn credit mỗi lần gọi — trộn chung là có ngày
+# cháy ví vì 1 cú bấm nhầm. Dùng chung VYCE_API_KEY với VyceQAService.
+bot.image_generator = VyceImageService(config.VYCE_API_KEY)
 
 # Danh sách cogs cần load — thêm tính năng mới = thêm 1 dòng ở đây.
 # Lưu ý: "cogs.personality" load TRƯỚC "cogs.ask" (không bắt buộc về mặt kỹ
@@ -71,6 +88,7 @@ bot.qa_service = QAAggregator(
 # không phải lúc load — nhưng đặt trước cho dễ đọc, đúng thứ tự phụ thuộc).
 INITIAL_EXTENSIONS = [
     "cogs.photo",
+    "cogs.gen_image",
     "cogs.rating",
     "cogs.battle",
     "cogs.guess",
@@ -95,6 +113,10 @@ async def on_ready():
             "Lưu ý: chưa cấu hình GEMINI_API_KEY hay GROQ_API_KEY nào — "
             "tính năng hỏi đáp (tag bot) đang tắt."
         )
+    if bot.image_generator.is_configured():
+        print(f"Tính năng tạo ảnh /gen_img đang bật, nguồn: {bot.image_generator.name}")
+    else:
+        print("Lưu ý: chưa cấu hình VYCE_API_KEY — lệnh /gen_img đang tắt.")
 
 
 async def main() -> None:
